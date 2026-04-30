@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>OptBus — DMTT</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo } = React;
+
+/* ════════════════════════════════════════════
+   MOCK DATA
+════════════════════════════════════════════ */
+const LINES = [
+  { id:'L001', name:'Centro — Pajuçara',          km:8.4,  buses:8,  eff:72, occ:81, delay:4.2, color:'#FFDD00',
+    route:[[-9.6658,-35.7350],[-9.6620,-35.7290],[-9.6580,-35.7220],[-9.6545,-35.7165],[-9.6510,-35.7128],[-9.6498,-35.7089]] },
+  { id:'L002', name:'Farol — Benedito Bentes',    km:13.1, buses:7,  eff:88, occ:64, delay:1.8, color:'#3DA85A',
+    route:[[-9.6733,-35.7386],[-9.6680,-35.7410],[-9.6580,-35.7430],[-9.6380,-35.7450],[-9.6120,-35.7460],[-9.5869,-35.7459]] },
+  { id:'L003', name:'Tabuleiro — Serraria',        km:11.6, buses:10, eff:61, occ:88, delay:7.5, color:'#CC3333',
+    route:[[-9.6390,-35.7850],[-9.6340,-35.7760],[-9.6280,-35.7680],[-9.6220,-35.7640],[-9.6180,-35.7610],[-9.6156,-35.7589]] },
+  { id:'L004', name:'Mangabeiras — Centro',        km:9.2,  buses:9,  eff:79, occ:75, delay:3.1, color:'#A855F7',
+    route:[[-9.6847,-35.7623],[-9.6800,-35.7560],[-9.6760,-35.7500],[-9.6720,-35.7440],[-9.6690,-35.7390],[-9.6658,-35.7350]] },
+  { id:'L005', name:'Ponta Verde — Antares',       km:12.3, buses:5,  eff:91, occ:58, delay:1.2, color:'#4A90D9',
+    route:[[-9.6576,-35.7147],[-9.6480,-35.7200],[-9.6350,-35.7280],[-9.6200,-35.7380],[-9.6090,-35.7490],[-9.5987,-35.7631]] },
+];
+
+const HOURLY = [
+  {h:'05',d:28},{h:'06',d:55},{h:'07',d:87},{h:'08',d:94},{h:'09',d:72},{h:'10',d:51},
+  {h:'11',d:48},{h:'12',d:66},{h:'13',d:62},{h:'14',d:49},{h:'15',d:53},{h:'16',d:71},
+  {h:'17',d:95},{h:'18',d:98},{h:'19',d:82},{h:'20',d:58},{h:'21',d:39},{h:'22',d:21},
+];
+
+// Per-line mock demand (deterministic)
+const LINE_HOURLY = {
+  L001: [22,48,91,96,68,45,42,61,58,44,50,67,92,97,85,62,37,19],
+  L002: [18,42,72,81,78,58,52,69,65,52,56,63,88,91,78,55,32,15],
+  L003: [30,60,95,99,74,52,48,68,63,48,55,74,99,100,88,65,42,22],
+  L004: [25,52,85,90,71,49,46,64,60,46,51,70,90,94,82,60,36,18],
+  L005: [14,34,58,65,60,42,38,52,48,36,40,50,68,72,61,44,25,11],
+};
+
+const WEEKLY_FLOW = {
+  L001: { manha:[12200,14100,13600,15200,17400,9800,6900], tarde:[8800,10100,9600,11200,12600,7900,5200], noite:[4900,5600,5300,6100,6700,3900,2900] },
+  L002: { manha:[9800,10900,10400,11900,13200,8300,5800], tarde:[7300,8200,7800,8900,9900,6200,4200], noite:[3800,4200,4000,4700,5200,3200,2300] },
+  L003: { manha:[14900,16800,16200,17900,19800,12800,8900], tarde:[10800,12200,11700,13200,14700,9800,6800], noite:[6800,7400,7100,7900,8800,5400,3900] },
+  L004: { manha:[12900,14800,14300,15800,17800,10800,7800], tarde:[9800,11200,10800,12200,13800,8800,6200], noite:[5900,6300,6100,6800,7800,4800,3400] },
+  L005: { manha:[7900,8800,8400,9800,10800,6800,4800], tarde:[5800,6800,6300,7300,8200,5300,3800], noite:[3300,3800,3600,4300,4800,2900,2100] },
+};
+
+const LINE_STATS = {
+  L001: { tempoMedio:28, intervalo:6.2, pontualidade:81, rfid:8240, recargas:1420, viagens:42 },
+  L002: { tempoMedio:35, intervalo:9.1, pontualidade:92, rfid:6580, recargas:980,  viagens:38 },
+  L003: { tempoMedio:31, intervalo:4.8, pontualidade:68, rfid:9120, recargas:1840, viagens:56 },
+  L004: { tempoMedio:24, intervalo:7.3, pontualidade:85, rfid:7650, recargas:1290, viagens:48 },
+  L005: { tempoMedio:33, intervalo:11.4,pontualidade:94, rfid:5230, recargas:760,  viagens:32 },
+};
+
+const INCIDENTS = [
+  {id:1,sev:'Alta',  cat:'crime',      type:'Assalto',        line:'L003',loc:'Av. Fernandes Lima, 1200',          time:'08:14', desc:'Passageiro relatou assalto a mão armada dentro do veículo em movimento.',                          st:'pending'},
+  {id:2,sev:'Média', cat:'ocorrencia', type:'Briga',           line:'L001',loc:'Terminal Rodoviário de Maceió',     time:'10:32', desc:'Conflito físico entre dois passageiros ao embarcar no terminal.',                                  st:'pending'},
+  {id:3,sev:'Baixa', cat:'ocorrencia', type:'Assédio verbal',  line:'L002',loc:'R. do Comércio, próx. 340',         time:'11:05', desc:'Relato de assédio verbal contra passageira por outro usuário.',                                    st:'pending'},
+  {id:4,sev:'Alta',  cat:'crime',      type:'Vandalismo',      line:'L004',loc:'Av. Gustavo Paiva, 5200',           time:'13:48', desc:'Vidro traseiro do veículo quebrado por passageiro não identificado.',                              st:'pending'},
+  {id:5,sev:'Média', cat:'operacional',type:'Irregularidade',  line:'L005',loc:'Pq. Municipal de Maceió',           time:'15:20', desc:'Motorista recusou embarque de passageiro com mobilidade reduzida.',                               st:'pending'},
+  {id:6,sev:'Alta',  cat:'crime',      type:'Ameaça',          line:'L001',loc:'R. Sá e Albuquerque, 420',          time:'16:47', desc:'Passageiro ameaçou motorista com objeto cortante após discussão sobre troco.',                     st:'pending'},
+  {id:7,sev:'Baixa', cat:'operacional',type:'Desvio de rota',  line:'L003',loc:'Trecho Av. Comendador Leão',        time:'07:52', desc:'Veículo registrou desvio de 1,4 km em relação ao trajeto oficial sem justificativa registrada.',  st:'pending'},
+  {id:8,sev:'Média', cat:'operacional',type:'Falha mecânica',  line:'L002',loc:'Garagem Central — Pátio 2',         time:'06:30', desc:'Ônibus apresentou falha no sistema de portas durante checagem matinal. Retirado de circulação.',  st:'pending'},
+  {id:9,sev:'Baixa', cat:'ocorrencia', type:'Perturbação',     line:'L004',loc:'Estação Benedito Bentes',           time:'12:18', desc:'Passageiro perturbou outros usuários com som alto por aparelho de som portátil.',                  st:'pending'},
+];
+
+const FAQ_GROUPS = [
+  { id:'rfid', topic:'RFID e Cartões', items:[
+    {id:'r1', q:'Como funciona a leitura por RFID nos ônibus?',
+     a:'Os leitores instalados nas portas de embarque e desembarque capturam automaticamente o sinal dos cartões ao passar a até 10 cm do leitor. O registro é enviado em tempo real ao sistema central, que atualiza o saldo e a contagem de passageiros.'},
+    {id:'r2', q:'O que fazer quando um cartão não é reconhecido no embarque?',
+     a:'Peça ao passageiro que aproxime o cartão novamente. Se o problema persistir, o cartão pode estar com o chip danificado ou saldo zerado. O motorista pode registrar a ocorrência via terminal de bordo; o passageiro deve comparecer a um ponto de atendimento para avaliação.'},
+    {id:'r3', q:'Com que frequência os dados de RFID são sincronizados com o sistema?',
+     a:'Os dados são transmitidos continuamente. Em condições normais, o intervalo entre leitura e servidor é inferior a 30 segundos. Em caso de falha de conectividade, os registros são armazenados localmente e sincronizados ao restabelecer a conexão.'},
+  ]},
+  { id:'sistema', topic:'Sistema e Monitoramento', items:[
+    {id:'s1', q:'O que é o índice de eficiência de rota?',
+     a:'É um índice de 0 a 100% que combina ocupação média, tempo de percurso real versus estimado e frequência de atrasos. Abaixo de 70% indica necessidade de revisão; acima de 85% é operação saudável.'},
+    {id:'s2', q:'Com que frequência os dados de lotação são atualizados?',
+     a:'Os dados de ocupação são atualizados a cada ~2 minutos com base nas leituras de RFID nas portas de embarque e desembarque de cada veículo.'},
+    {id:'s3', q:'Como filtrar os dados por linha específica?',
+     a:'Nas telas de Painel Geral e Linhas, use o menu suspenso "Linha" no topo. Os gráficos, o mapa e as tabelas se atualizam automaticamente ao selecionar uma linha.'},
+    {id:'s4', q:'Como exportar um relatório de dados?',
+     a:'A exportação em CSV está disponível pelo ícone no canto de cada tabela. A integração com PDF está prevista para a versão 1.1 do sistema.'},
+  ]},
+  { id:'operacao', topic:'Operação e Frota', items:[
+    {id:'o1', q:'Como executar a otimização de uma linha?',
+     a:'Na tela "Linhas", selecione a linha e clique em "Executar Otimização". O algoritmo analisa dados dos últimos 30 dias e exibe sugestões de divisão, fusão ou ajuste de frequência da rota.'},
+    {id:'o2', q:'Como funciona a alocação automática de frota?',
+     a:'O sistema analisa a demanda histórica por faixa de horário. O algoritmo identifica períodos com superlotação ou ociosidade e recomenda redistribuição de veículos entre linhas, exibido na tela de Alocação de Frota.'},
+    {id:'o3', q:'Posso aplicar uma sugestão de otimização sem aprovação da gerência?',
+     a:'Não. Todas as sugestões do algoritmo são recomendações e precisam de confirmação manual de um operador autorizado. O botão "Aplicar sugestão" dispara um fluxo de aprovação registrado no sistema.'},
+  ]},
+  { id:'seguranca', topic:'Segurança e Acesso', items:[
+    {id:'se1', q:'Quando uma denúncia é encaminhada automaticamente à polícia?',
+     a:'Ocorrências de severidade "Alta" dos tipos Assalto, Ameaça ou Crime são sinalizadas para acionamento policial, mas o operador deve confirmar antes do envio efetivo.'},
+    {id:'se2', q:'Como acionar a polícia por uma ocorrência registrada no sistema?',
+     a:'Na aba "Crimes" da tela de Segurança, abra a ocorrência e clique em "Acionar Polícia". Uma confirmação será exibida antes do envio. O acionamento fica registrado com horário e nome do operador responsável.'},
+    {id:'se3', q:'Em caso de problemas com login ou senha, quem contatar?',
+     a:'Contate o suporte técnico da DMTT pelo ramal 4120 ou pelo e-mail suporte@dmtt.gov.br. Não compartilhe suas credenciais com outros usuários.'},
+  ]},
+];
+
+const OPT = {
+  L001: {tipo:'divisão',    titulo:'Dividir linha em dois segmentos',
+    desc:'A linha L001 (8,4 km) apresenta alta variância de lotação entre os trechos. Sugere-se divisão em L001A (Centro–Pajuçara, 4,2 km) e L001B (Pajuçara–Ponta Verde, 4,2 km) com integração em terminal intermediário na Orla.',
+    impacto:'↓ 18% no tempo médio de viagem · ↑ 12% de cobertura · necessidade de +2 veículos'},
+  L002: {tipo:'manutenção', titulo:'Rota dentro dos parâmetros aceitáveis',
+    desc:'A linha L002 apresenta eficiência de 88% e atrasos de apenas 1,8 min. Nenhuma reestruturação necessária. Recomenda-se revisão periódica em 90 dias.',
+    impacto:'Sem alterações recomendadas'},
+  L003: {tipo:'ajuste',     titulo:'Rebalanceamento de frequência e trajeto',
+    desc:'Linha L003 com eficiência crítica de 61% e superlotação de 88%. Sugere-se aumento de frequência nos picos (06–09h e 17–19h) e incorporação de trecho ao corredor da L004 (Mangabeiras), eliminando 2,8 km de sobreposição.',
+    impacto:'↓ 23% no tempo de espera · ↓ 11% de sobreposição · necessidade de +3 veículos no pico'},
+  L004: {tipo:'ajuste',     titulo:'Realocação pontual de veículo',
+    desc:'Linha L004 com eficiência de 79%. Recomenda-se retirada de 1 veículo entre 10h e 16h para realocação na L003 (Tabuleiro–Serraria), que opera com déficit no mesmo período.',
+    impacto:'↓ 1 veículo entre 10h–16h · veículo realocado para L003'},
+  L005: {tipo:'manutenção', titulo:'Linha de alto desempenho',
+    desc:'L005 com eficiência de 91% — melhor da frota. Nenhuma intervenção necessária. Pode servir de referência operacional para outras linhas.',
+    impacto:'Nenhuma alteração necessária'},
+};
+
+const OPT_ROUTES = {
+  L001: [
+    { label:'L001A — Centro–Pajuçara', color:'#FFDD00',
+      route:[[-9.6658,-35.7350],[-9.6620,-35.7290],[-9.6580,-35.7220],[-9.6545,-35.7165],[-9.6528,-35.7148]] },
+    { label:'L001B — Pajuçara–Ponta Verde', color:'#4A90D9',
+      route:[[-9.6545,-35.7165],[-9.6510,-35.7128],[-9.6498,-35.7089],[-9.6476,-35.7055]] },
+  ],
+  L002: [
+    { label:'L002 — Sem alteração', color:'#3DA85A',
+      route:[[-9.6733,-35.7386],[-9.6680,-35.7410],[-9.6580,-35.7430],[-9.6380,-35.7450],[-9.6120,-35.7460],[-9.5869,-35.7459]] },
+  ],
+  L003: [
+    { label:'L003 — Rota rebalanceada', color:'#FFDD00',
+      route:[[-9.6390,-35.7850],[-9.6333,-35.7756],[-9.6268,-35.7665],[-9.6208,-35.7625],[-9.6175,-35.7604],[-9.6156,-35.7589]] },
+  ],
+  L004: [
+    { label:'L004 — Rota ajustada', color:'#FFDD00',
+      route:[[-9.6847,-35.7623],[-9.6796,-35.7553],[-9.6753,-35.7493],[-9.6716,-35.7438],[-9.6685,-35.7386],[-9.6658,-35.7350]] },
+  ],
+  L005: [
+    { label:'L005 — Sem alteração', color:'#3DA85A',
+      route:[[-9.6576,-35.7147],[-9.6480,-35.7200],[-9.6350,-35.7280],[-9.6200,-35.7380],[-9.6090,-35.7490],[-9.5987,-35.7631]] },
+  ],
+};
+
+const ALLOC = {
+  '05:00–07:00': {alta:[{id:'L003',n:'Tabuleiro–Serraria',cur:6,rec:8,d:'+2'},{id:'L001',n:'Centro–Pajuçara',cur:5,rec:6,d:'+1'}], baixa:[{id:'L005',n:'Ponta Verde–Antares',cur:4,rec:2,d:'-2'},{id:'L002',n:'Farol–Ben. Bentes',cur:5,rec:3,d:'-2'}]},
+  '07:00–10:00': {alta:[{id:'L003',n:'Tabuleiro–Serraria',cur:8,rec:12,d:'+4'},{id:'L001',n:'Centro–Pajuçara',cur:8,rec:11,d:'+3'},{id:'L004',n:'Mangabeiras–Centro',cur:9,rec:11,d:'+2'}], baixa:[{id:'L005',n:'Ponta Verde–Antares',cur:5,rec:3,d:'-2'},{id:'L002',n:'Farol–Ben. Bentes',cur:6,rec:4,d:'-2'}]},
+  '10:00–14:00': {alta:[{id:'L002',n:'Farol–Ben. Bentes',cur:6,rec:7,d:'+1'}], baixa:[{id:'L003',n:'Tabuleiro–Serraria',cur:10,rec:6,d:'-4'},{id:'L001',n:'Centro–Pajuçara',cur:8,rec:5,d:'-3'}]},
+  '14:00–17:00': {alta:[{id:'L004',n:'Mangabeiras–Centro',cur:7,rec:8,d:'+1'},{id:'L002',n:'Farol–Ben. Bentes',cur:6,rec:7,d:'+1'}], baixa:[{id:'L005',n:'Ponta Verde–Antares',cur:5,rec:3,d:'-2'},{id:'L001',n:'Centro–Pajuçara',cur:8,rec:6,d:'-2'}]},
+  '17:00–20:00': {alta:[{id:'L001',n:'Centro–Pajuçara',cur:8,rec:13,d:'+5'},{id:'L003',n:'Tabuleiro–Serraria',cur:10,rec:14,d:'+4'},{id:'L004',n:'Mangabeiras–Centro',cur:9,rec:12,d:'+3'}], baixa:[{id:'L005',n:'Ponta Verde–Antares',cur:5,rec:2,d:'-3'}]},
+  '20:00–23:00': {alta:[], baixa:[{id:'L003',n:'Tabuleiro–Serraria',cur:10,rec:5,d:'-5'},{id:'L004',n:'Mangabeiras–Centro',cur:9,rec:4,d:'-5'},{id:'L001',n:'Centro–Pajuçara',cur:8,rec:4,d:'-4'}]},
+};
+
+const CHAT_KB = [
+  {keys:['filtro','filtrar','linha','selecionar'],   r:'Para aplicar filtros, use os menus suspensos no topo de cada tela. Você pode filtrar por linha e por período. Os gráficos, mapas e tabelas se atualizam automaticamente.'},
+  {keys:['otimiz','rota'],                            r:'A otimização de rota é acessada na tela "Linhas". Selecione a linha e clique em "Executar Otimização". O algoritmo analisa os últimos 30 dias e sugere ajustes como divisão, fusão ou remoção de trechos.'},
+  {keys:['frota','ônibus','alocar','aloc','redistrib'],r:'Na tela "Alocação de Frota", selecione o turno desejado e clique em "Atualizar". O sistema mostrará as linhas com maior demanda (reforçar) e menor demanda (reduzir) e os veículos recomendados.'},
+  {keys:['denúncia','seguran','polí','ocorrência','incidente'], r:'Ocorrências de segurança ficam na tela "Segurança". Cada card mostra a severidade, tipo e localização. Você pode Acionar a Polícia, Arquivar ou Ignorar cada registro.'},
+  {keys:['relatório','relatorio','export','baixar'],  r:'A exportação em CSV está disponível pelo ícone no canto de cada tabela. Exportação em PDF está prevista para a versão 1.1 do sistema.'},
+  {keys:['login','senha','acesso','entrar'],          r:'O acesso é feito com as credenciais fornecidas pelo administrador da DMTT. Em caso de problema com login ou senha, contate o suporte técnico pelo ramal 4120.'},
+  {keys:['eficiência','índice','indicador'],          r:'A eficiência é um índice de 0 a 100% que combina ocupação média, tempo de percurso real vs. estimado e frequência de atrasos. Abaixo de 70% indica necessidade de revisão; acima de 85% é operação saudável.'},
+  {keys:['mapa','rota','trajeto','traçado'],          r:'Os mapas de rotas estão disponíveis nas telas Painel Geral, Linhas e Alocação de Frota. Use o filtro de linha para destacar um trajeto específico.'},
+];
+
+const getReply = msg => {
+  const m = msg.toLowerCase();
+  for (const item of CHAT_KB) if (item.keys.some(k => m.includes(k))) return item.r;
+  return 'Não encontrei uma resposta específica para isso. Tente perguntar sobre: filtros, otimização de rota, alocação de frota, ocorrências de segurança ou exportação de dados. Você também pode consultar o FAQ para respostas detalhadas.';
+};
+
+/* ════════════════════════════════════════════
+   ÍCONES SVG
+════════════════════════════════════════════ */
+const Ic = ({ n, s=15, c='currentColor' }) => ({
+  dash:  <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="6" rx="1" stroke={c} strokeWidth="1.3"/><rect x="9" y="1" width="6" height="6" rx="1" stroke={c} strokeWidth="1.3"/><rect x="1" y="9" width="6" height="6" rx="1" stroke={c} strokeWidth="1.3"/><rect x="9" y="9" width="6" height="6" rx="1" stroke={c} strokeWidth="1.3"/></svg>,
+  route: <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><circle cx="4" cy="4" r="2.5" stroke={c} strokeWidth="1.3"/><circle cx="12" cy="12" r="2.5" stroke={c} strokeWidth="1.3"/><path d="M4 6.5V8.5a3 3 0 003 3H9" stroke={c} strokeWidth="1.3" strokeLinecap="round"/></svg>,
+  fleet: <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><rect x="1" y="5" width="14" height="7" rx="1.5" stroke={c} strokeWidth="1.3"/><circle cx="4.5" cy="12" r="1.5" stroke={c} strokeWidth="1.2"/><circle cx="11.5" cy="12" r="1.5" stroke={c} strokeWidth="1.2"/><path d="M1 8h14" stroke={c} strokeWidth="1.3"/><path d="M6 5V3h4v2" stroke={c} strokeWidth="1.3" strokeLinecap="round"/></svg>,
+  sec:   <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M8 1.5L2 4v4.5C2 11.5 4.7 14 8 15c3.3-1 6-3.5 6-6.5V4L8 1.5z" stroke={c} strokeWidth="1.3"/><path d="M5.5 8l2 2 3-3" stroke={c} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  chat:  <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v7a1 1 0 01-1 1H5l-3 3V3z" stroke={c} strokeWidth="1.3"/></svg>,
+  faq:   <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke={c} strokeWidth="1.3"/><path d="M6.5 6.5a1.5 1.5 0 113 0c0 1-1.5 1.5-1.5 2.5" stroke={c} strokeWidth="1.3" strokeLinecap="round"/><circle cx="8" cy="11.5" r="0.5" fill={c}/></svg>,
+  out:   <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M6 14H3a1 1 0 01-1-1V3a1 1 0 011-1h3" stroke={c} strokeWidth="1.3" strokeLinecap="round"/><path d="M11 11l3-3-3-3M14 8H6" stroke={c} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  bus:   <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="14" height="9" rx="1.5" stroke={c} strokeWidth="1.3"/><circle cx="4" cy="12" r="1.5" stroke={c} strokeWidth="1.2"/><circle cx="12" cy="12" r="1.5" stroke={c} strokeWidth="1.2"/><path d="M1 7h14M6 3v5M10 3v5" stroke={c} strokeWidth="1.3"/></svg>,
+  send:  <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M14 2L7 9M14 2L9 14l-2-5-5-2 12-5z" stroke={c} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  chv:   <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke={c} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  chvu:  <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M4 10l4-4 4 4" stroke={c} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  ref:   <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M13 8a5 5 0 11-1.46-3.54L13 3v4h-4" stroke={c} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  warn:  <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M8 2L1.5 14h13L8 2z" stroke={c} strokeWidth="1.3"/><path d="M8 6.5v4" stroke={c} strokeWidth="1.3" strokeLinecap="round"/><circle cx="8" cy="12" r="0.5" fill={c}/></svg>,
+  eye:   <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" stroke={c} strokeWidth="1.3"/><circle cx="8" cy="8" r="2.5" stroke={c} strokeWidth="1.3"/></svg>,
+  eyeo:  <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><path d="M2 2l12 12M6.5 6.7A2.5 2.5 0 0010.3 10M4 4C2.5 5.2 1.5 7 1.5 7s2.5 5 6.5 5c1.3 0 2.5-.4 3.5-1M7 3.1C7.3 3 7.7 3 8 3c4 0 6.5 4 6.5 5s-.6 1.4-1.5 2.3" stroke={c} strokeWidth="1.3" strokeLinecap="round"/></svg>,
+  lock:  <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="8" rx="1.5" stroke={c} strokeWidth="1.3"/><path d="M5 7V5a3 3 0 016 0v2" stroke={c} strokeWidth="1.3" strokeLinecap="round"/></svg>,
+  user:  <svg width={s} height={s} viewBox="0 0 16 16" fill="none"><circle cx="8" cy="5.5" r="2.5" stroke={c} strokeWidth="1.3"/><path d="M2.5 14c0-2.8 2.5-5 5.5-5s5.5 2.2 5.5 5" stroke={c} strokeWidth="1.3" strokeLinecap="round"/></svg>,
+}[n] || null);
+
+/* ════════════════════════════════════════════
+   LEAFLET MAP
+════════════════════════════════════════════ */
+const LeafletMap = ({ highlightId=null, height='380px', mapKey }) => {
+  const divRef = useRef(null);
+  const mapRef = useRef(null);
+
+  useEffect(() => {
+    if (!divRef.current) return;
+    const map = L.map(divRef.current, { zoomControl: true, attributionControl: false })
+      .setView([-9.640, -35.737], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    mapRef.current = map;
+
+    LINES.forEach(ln => {
+      const isHL = highlightId ? ln.id === highlightId : true;
+      const routeColor = isHL ? '#FFDD00' : '#444444';
+      L.polyline(ln.route, {
+        color: routeColor,
+        weight: highlightId ? (isHL ? 5 : 1.5) : 2.5,
+        opacity: highlightId ? (isHL ? 1 : 0.3) : 0.7,
+      }).addTo(map);
+      if (!highlightId || isHL) {
+        const r = ln.route;
+        L.circleMarker(r[0], { radius:5, color:routeColor, fillColor:'#141414', fillOpacity:1, weight:2 }).addTo(map);
+        L.circleMarker(r[r.length-1], { radius:5, color:routeColor, fillColor:routeColor, fillOpacity:1, weight:2 }).addTo(map);
+      }
+    });
+
+    return () => { map.remove(); mapRef.current = null; };
+  }, [mapKey, highlightId]);
+
+  return <div ref={divRef} style={{ height, width:'100%', borderRadius:4, zIndex:0 }}/>;
+};
+
+/* ════════════════════════════════════════════
+   OPT MAP — rota original vs proposta
+════════════════════════════════════════════ */
+const OptMap = ({ lineId, height='240px' }) => {
+  const divRef = useRef(null);
+  const orig = LINES.find(l => l.id === lineId);
+  const newRoutes = OPT_ROUTES[lineId];
+
+  useEffect(() => {
+    if (!divRef.current) return;
+    const center = orig.route[Math.floor(orig.route.length / 2)];
+    const map = L.map(divRef.current, { zoomControl:false, attributionControl:false })
+      .setView(center, 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    L.polyline(orig.route, { color:'#888', weight:2.5, opacity:0.5, dashArray:'8,6' }).addTo(map);
+
+    newRoutes.forEach(seg => {
+      L.polyline(seg.route, { color:seg.color, weight:4.5, opacity:0.92 }).addTo(map);
+      const r = seg.route;
+      L.circleMarker(r[0], { radius:5, color:seg.color, fillColor:'#1a1a1a', fillOpacity:1, weight:2 }).addTo(map);
+      L.circleMarker(r[r.length-1], { radius:5, color:seg.color, fillColor:seg.color, fillOpacity:1, weight:2 }).addTo(map);
+    });
+
+    return () => { map.remove(); };
+  }, [lineId]);
+
+  return <div ref={divRef} style={{ height, width:'100%', borderRadius:4, zIndex:0 }}/>;
+};
+
+/* ════════════════════════════════════════════
+   SVG BAR CHART
+════════════════════════════════════════════ */
+const BarChart = ({ data, h=100 }) => {
+  const max = Math.max(...data.map(d=>d.d));
+  const W = 500, bw = Math.floor(W/data.length)-2;
+  return (
+    <svg viewBox={`0 0 ${W} ${h+22}`} width="100%" preserveAspectRatio="none">
+      {data.map((d,i) => {
+        const bh = Math.round((d.d/max)*h);
+        const x = i*(W/data.length)+1;
+        const col = d.d>80?'#FFDD00':'#333333';
+        return (
+          <g key={d.h}>
+            <rect x={x} y={h-bh} width={bw} height={bh} fill={col} rx="2" opacity="0.83"/>
+            <text x={x+bw/2} y={h+15} textAnchor="middle" fontSize="8.5" fill="#A6A6A6">{d.h}h</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+};
+
+/* ════════════════════════════════════════════
+   AREA CHART
+════════════════════════════════════════════ */
+const AreaChart = ({ data }) => {
+  const days = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'];
+  const W = 560, H = 165;
+  const pad = { l:38, r:16, t:8, b:26 };
+  const iW = W - pad.l - pad.r, iH = H - pad.t - pad.b;
+  const n = days.length;
+  const maxV = Math.max(...data.manha, ...data.tarde, ...data.noite) * 1.12;
+
+  const xP = i => pad.l + (i / (n-1)) * iW;
+  const yP = v => pad.t + iH * (1 - v / maxV);
+
+  const smoothLine = vals => {
+    const pts = vals.map((v,i) => ({ x:xP(i), y:yP(v) }));
+    let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+    for (let i=1; i<pts.length; i++) {
+      const cp = ((pts[i-1].x + pts[i].x) / 2).toFixed(1);
+      d += ` C ${cp} ${pts[i-1].y.toFixed(1)}, ${cp} ${pts[i].y.toFixed(1)}, ${pts[i].x.toFixed(1)} ${pts[i].y.toFixed(1)}`;
+    }
+    return d;
+  };
+
+  const areaPath = vals => {
+    const bY = (pad.t + iH).toFixed(1);
+    return `${smoothLine(vals)} L${xP(n-1).toFixed(1)} ${bY} L${xP(0).toFixed(1)} ${bY} Z`;
+  };
+
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => ({
+    lbl: Math.round(maxV * f / 1000) + 'k',
+    y: yP(maxV * f),
+  }));
+
+  const series = [
+    { vals:data.noite, fill:'#2E5022', stroke:'#3E6A2E' },
+    { vals:data.tarde, fill:'#4A7A3A', stroke:'#5A9048' },
+    { vals:data.manha, fill:'#8A7200', stroke:'#FFDD00' },
+  ];
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{overflow:'visible',display:'block'}}>
+      {yTicks.map(({lbl,y},i) => (
+        <g key={i}>
+          <line x1={pad.l} y1={y} x2={pad.l+iW} y2={y} stroke="var(--border)" strokeWidth="0.5" strokeDasharray="3,3"/>
+          <text x={pad.l-5} y={y+3} textAnchor="end" fontSize="8" fill="var(--muted)">{lbl}</text>
+        </g>
+      ))}
+      {series.map((s,i) => <path key={i} d={areaPath(s.vals)} fill={s.fill} opacity="0.65"/>)}
+      {series.map((s,i) => <path key={i+'-l'} d={smoothLine(s.vals)} fill="none" stroke={s.stroke} strokeWidth="1.8" opacity="0.95"/>)}
+      {days.map((d,i) => (
+        <text key={d} x={xP(i)} y={H-4} textAnchor="middle" fontSize="8.5" fill="var(--muted)">{d}</text>
+      ))}
+    </svg>
+  );
+};
+
+/* ════════════════════════════════════════════
+   DONUT CHART
+════════════════════════════════════════════ */
+const Donut = ({ items }) => {
+  const total = items.reduce((s,i)=>s+i.v,0);
+  let angle = -90;
+  const r=50, cx=65, cy=65;
+  const slices = items.map(it => {
+    const a = (it.v/total)*360;
+    const s = (angle*Math.PI)/180, e = ((angle+a)*Math.PI)/180;
+    const x1=cx+r*Math.cos(s), y1=cy+r*Math.sin(s), x2=cx+r*Math.cos(e), y2=cy+r*Math.sin(e);
+    const p = `M${cx} ${cy} L${x1} ${y1} A${r} ${r} 0 ${a>180?1:0} 1 ${x2} ${y2} Z`;
+    angle += a;
+    return { ...it, p };
+  });
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:18}}>
+      <svg viewBox="0 0 130 130" width="110" height="110" style={{flexShrink:0}}>
+        {slices.map((s,i)=><path key={i} d={s.p} fill={s.col} opacity="0.88"/>)}
+        <circle cx={cx} cy={cy} r="30" style={{fill:"var(--card)"}}/>
+        <text x={cx} y={cy-3} textAnchor="middle" fontSize="12" fontWeight="700" style={{fill:"var(--text)"}}>{total}</text>
+        <text x={cx} y={cy+12} textAnchor="middle" fontSize="7.5" style={{fill:"var(--muted)"}}>total</text>
+      </svg>
+      <div style={{display:'flex',flexDirection:'column',gap:7}}>
+        {slices.map((s,i)=>(
+          <div key={i} style={{display:'flex',alignItems:'center',gap:7,fontSize:11}}>
+            <span style={{width:9,height:9,borderRadius:2,background:s.col,flexShrink:0}}/>
+            <span style={{color:'var(--muted)'}}>{s.lbl}</span>
+            <span style={{fontFamily:'IBM Plex Mono',fontWeight:600,marginLeft:'auto',paddingLeft:8}}>{s.v}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════
+   SIDEBAR
+════════════════════════════════════════════ */
+const Sidebar = ({ cur, nav, logout, collapsed, onToggle }) => {
+  const items = [
+    {id:'dash',  lbl:'Painel Geral',      ic:'dash',  sec:'Análise'},
+    {id:'linha', lbl:'Linhas',            ic:'route'},
+    {id:'frota', lbl:'Alocação de Frota', ic:'fleet'},
+    {id:'sec',   lbl:'Segurança',         ic:'sec',   sec:'Operações'},
+    {id:'chat',  lbl:'Assistente',        ic:'chat',  sec:'Suporte'},
+    {id:'faq',   lbl:'FAQ',               ic:'faq'},
+  ];
+  const ToggleIc = () => (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+      {collapsed
+        ? <path d="M6 12l4-4-4-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+        : <path d="M10 12L6 8l4-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+      }
+    </svg>
+  );
+  return (
+    <aside className={`sidebar${collapsed?' collapsed':''}`}>
+      <div className="sb-header">
+        {!collapsed && (
+          <div style={{flex:1,minWidth:0}}>
+            <div className="sb-logo">OptBus</div>
+            <div className="sb-sub">DMTT — Gestão de Transporte</div>
+          </div>
+        )}
+        <button className="sb-toggle" onClick={onToggle} title={collapsed?'Expandir sidebar':'Recolher sidebar'}>
+          <ToggleIc/>
+        </button>
+      </div>
+      <nav className="sb-nav">
+        {items.map(item => (
+          <React.Fragment key={item.id}>
+            {item.sec && !collapsed && <div className="nav-sect">{item.sec}</div>}
+            <div className={`nav-item${cur===item.id?' active':''}`} onClick={()=>nav(item.id)} title={collapsed?item.lbl:undefined}>
+              {Ic({n:item.ic, s:14, c:cur===item.id?'#FFDD00':'#7A8799'})}
+              {!collapsed && item.lbl}
+            </div>
+          </React.Fragment>
+        ))}
+      </nav>
+      {!collapsed && (
+        <div className="sb-footer">
+          <div className="sb-user"><strong>João Silva</strong>Operador Sênior</div>
+          <div className="nav-item" style={{padding:'6px 0',cursor:'pointer',marginTop:10}} onClick={logout}>
+            {Ic({n:'out',s:13,c:'#7A8799'})}
+            <span style={{fontSize:12,color:'var(--muted)'}}>Encerrar sessão</span>
+          </div>
+        </div>
+      )}
+    </aside>
+  );
+};
+
+/* ════════════════════════════════════════════
+   LOGIN
+════════════════════════════════════════════ */
+const Login = ({ onLogin }) => (
+  <div className="login-page">
+    <div className="login-left">
+      <div className="login-brand">
+        <div className="login-brand-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                  <rect x="2" y="4" width="20" height="13" rx="2" stroke="#FFDD00" strokeWidth="1.6"/>
+                  <circle cx="6.5" cy="18" r="2" stroke="#FFDD00" strokeWidth="1.5"/>
+                  <circle cx="17.5" cy="18" r="2" stroke="#FFDD00" strokeWidth="1.5"/>
+                  <path d="M2 10h20" stroke="#FFDD00" strokeWidth="1.5"/>
+                  <path d="M9 4v7M15 4v7" stroke="#FFDD00" strokeWidth="1.4" strokeLinecap="round"/>
+                  <path d="M8.5 17h7" stroke="#FFDD00" strokeWidth="1.4" strokeLinecap="round"/>
+                </svg>
+              </div>
+        <div>
+          <div className="login-brand-name">OptBus</div>
+          <div className="login-brand-sub">Secretaria Municipal de Trânsito e Transporte</div>
+        </div>
+      </div>
+      <div className="login-hero">
+        <div className="login-tag-line"><span className="login-tag-bar"/>Sistema Oficial</div>
+        <h1 className="login-heading">Gestão integrada de transporte público baseada em RFID</h1>
+        <p className="login-desc">Plataforma institucional para monitoramento da frota, análise de fluxo de passageiros, otimização de rotas e segurança operacional em tempo real.</p>
+        <ul className="login-bullets">
+          <li>Leitura automática via cartões RFID</li>
+          <li>Indicadores de ocupação por linha</li>
+          <li>Registro auditável de eventos</li>
+        </ul>
+      </div>
+      <div className="login-left-footer">© 2026 Prefeitura Municipal — Uso restrito a servidores autorizados.</div>
+    </div>
+
+    <div className="login-right">
+      <div className="login-right-inner">
+        <div className="login-right-title">Acesso ao sistema</div>
+        <div className="login-right-sub">Informe suas credenciais institucionais.</div>
+        <div className="login-form-card">
+          <div className="login-field">
+            <div className="login-field-lbl">USUÁRIO</div>
+            <div className="login-input-wrap">
+              {Ic({n:'user',s:14,c:'var(--muted)'})}
+              <input className="login-field-input" type="text" placeholder="carlos.mendes"/>
+            </div>
+          </div>
+          <div className="login-field">
+            <div className="login-field-lbl">SENHA</div>
+            <div className="login-input-wrap">
+              {Ic({n:'lock',s:14,c:'var(--muted)'})}
+              <input className="login-field-input" type="password" placeholder="••••••••"/>
+            </div>
+          </div>
+          <div className="login-row">
+            <label className="login-check-lbl"><input type="checkbox" className="login-check"/> Manter conectado</label>
+            <span className="login-forgot">Esqueci a senha</span>
+          </div>
+          <button className="btn btn-primary login-btn" onClick={onLogin}>Entrar</button>
+          <div className="login-secure">
+            {Ic({n:'sec',s:13,c:'var(--green)'})} Conexão segura • Acesso registrado e auditado
+          </div>
+        </div>
+        <div className="login-support">
+          Em caso de dúvidas, contate o suporte: <em>suporte@dmtt.gov.br</em>
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+/* ════════════════════════════════════════════
+   DASHBOARD
+════════════════════════════════════════════ */
+const Dashboard = () => {
+  const [fl, setFl]=useState('all');
+  const shown = fl==='all' ? LINES : LINES.filter(l=>l.id===fl);
+  const avgOcc = Math.round(shown.reduce((s,l)=>s+l.occ,0)/shown.length);
+  const donutItems = [
+    {lbl:'Alta (>80%)',  v:shown.filter(l=>l.occ>80).length||0,  col:'#FFDD00'},
+    {lbl:'Moderada 60–80%', v:shown.filter(l=>l.occ>=60&&l.occ<=80).length||0, col:'#A6A6A6'},
+    {lbl:'Baixa (<60%)', v:shown.filter(l=>l.occ<60).length||0,  col:'#383838'},
+  ].filter(x=>x.v>0);
+  if(!donutItems.length) donutItems.push({lbl:'Sem dados',v:1,col:'#383838'});
+
+  return (
+    <div>
+      <div className="topbar">
+        <div>
+          <span className="topbar-title">Painel Geral</span>
+          <span className="topbar-meta" style={{marginLeft:14}}>Atualizado às 14:27 · dados em tempo quase real</span>
+        </div>
+        <div className="frow">
+          <span className="flbl">Filtrar linha:</span>
+          <select className="sel" value={fl} onChange={e=>setFl(e.target.value)}>
+            <option value="all">Todas as linhas</option>
+            {LINES.map(l=><option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="content">
+        <div className="kpi-grid">
+          {[
+            {lbl:'Linhas Monitoradas', val:shown.length, delta:'em operação', cls:'c-nt'},
+            {lbl:'Veículos em Circulação', val:shown.reduce((s,l)=>s+l.buses,0), delta:'+2 vs ontem', cls:'c-up'},
+            {lbl:'Ocupação Média', val:`${avgOcc}%`, delta:avgOcc>80?'⚠ Crítica':avgOcc>65?'Moderada':'Normal', cls:avgOcc>80?'c-dn':avgOcc>65?'c-nt':'c-up'},
+            {lbl:'Ocorrências Hoje', val:'5', delta:'2 requerem ação', cls:'c-dn'},
+          ].map((k,i)=>(
+            <div key={i} className="kpi">
+              <div className="kpi-lbl">{k.lbl}</div>
+              <div className="kpi-val">{k.val}</div>
+              <div className={`kpi-delta ${k.cls}`}>{k.delta}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="g2 mb14">
+          <div className="card">
+            <div className="card-title">Demanda por hora — hoje</div>
+            <BarChart data={HOURLY}/>
+            <div style={{display:'flex',gap:14,marginTop:6,fontSize:10,color:'var(--muted)'}}>
+              <span>■ <span style={{color:'#FFDD00'}}>Pico (&gt;80%)</span></span>
+              <span>■ <span style={{color:'#6B6B6B'}}>Normal (&lt;80%)</span></span>
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-title">Distribuição de lotação</div>
+            <Donut items={donutItems}/>
+            <div style={{marginTop:14}}>
+              {shown.map(l=>(
+                <div key={l.id} style={{marginBottom:8}}>
+                  <div className="prow"><span style={{fontSize:12}}>{l.id} — {l.name.split('—')[0].trim()}</span><span className="mono" style={{fontSize:11}}>{l.occ}%</span></div>
+                  <div className="pbar"><div className="pfill" style={{width:`${l.occ}%`,background:'#FFDD00'}}/></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="card mb14">
+          <div className="card-title">Mapa de rotas — Maceió/AL</div>
+          <LeafletMap highlightId={fl!=='all'?fl:null} height="390px" mapKey={`dash-${fl}`}/>
+        </div>
+
+        <div className="card">
+          <div className="card-title">Resumo das linhas</div>
+          <table className="tbl">
+            <thead><tr><th>Linha</th><th>Trajeto</th><th>Veículos</th><th>Extensão</th><th>Ocupação</th><th>Eficiência</th><th>Atraso médio</th></tr></thead>
+            <tbody>
+              {shown.map(l=>(
+                <tr key={l.id}>
+                  <td><span className="badge bb">{l.id}</span></td>
+                  <td style={{fontSize:12}}>{l.name}</td>
+                  <td className="mono" style={{fontSize:12}}>{l.buses}</td>
+                  <td className="mono" style={{fontSize:12}}>{l.km} km</td>
+                  <td><span className={`badge ${l.occ>80?'br':l.occ>60?'by':'bg'}`}>{l.occ}%</span></td>
+                  <td>
+                    <div style={{display:'flex',alignItems:'center',gap:7}}>
+                      <div className="eff"><div className="eff-f" style={{width:`${l.eff}%`,background:'#FFDD00'}}/></div>
+                      <span className="mono" style={{fontSize:11}}>{l.eff}%</span>
+                    </div>
+                  </td>
+                  <td className="mono" style={{fontSize:12}}>{l.delay} min</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════
+   LINHAS
+════════════════════════════════════════════ */
+const Linha = () => {
+  const [sel, setSel]=useState(LINES[0]);
+  const [modal, setModal]=useState(false);
+  const [done, setDone]=useState(false);
+  const [period, setPeriod]=useState('semana');
+  const sug = OPT[sel.id];
+  const hData = useMemo(()=>HOURLY.map((d,i)=>({h:d.h, d:LINE_HOURLY[sel.id][i]})),[sel.id]);
+  const flow = WEEKLY_FLOW[sel.id];
+  const stats = LINE_STATS[sel.id];
+
+  const totalSemanal = useMemo(()=>[...flow.manha,...flow.tarde,...flow.noite].reduce((s,v)=>s+v,0),[sel.id]);
+  const picoDiario = useMemo(()=>Math.max(...flow.manha.map((_,i)=>flow.manha[i]+flow.tarde[i]+flow.noite[i])),[sel.id]);
+  const fmtBig = n=>n.toLocaleString('pt-BR');
+
+  return (
+    <div>
+      <div className="topbar">
+        <span className="topbar-title">Linhas</span>
+        <div className="frow">
+          <span className="flbl">Linha:</span>
+          <select className="sel" value={sel.id} onChange={e=>{setSel(LINES.find(l=>l.id===e.target.value));setDone(false);}}>
+            {LINES.map(l=><option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="content">
+
+        {/* KPIs */}
+        <div className="kpi-grid mb14">
+          {[
+            {lbl:'Total Semanal', val:fmtBig(totalSemanal), delta:'passageiros', cls:'c-nt'},
+            {lbl:'Pico Diário', val:fmtBig(picoDiario), delta:'máx. passageiros/dia', cls:'c-nt'},
+            {lbl:'Eficiência de Rota', val:`${sel.eff}%`, delta:sel.eff<70?'Requer atenção':sel.eff>85?'Operação saudável':'Moderada', cls:sel.eff<70?'c-dn':sel.eff>85?'c-up':'c-nt'},
+            {lbl:'Atraso Médio', val:`${sel.delay} min`, delta:sel.delay>5?'Acima do limite':sel.delay<3?'Dentro do ideal':'Aceitável', cls:sel.delay>5?'c-dn':sel.delay<3?'c-up':'c-nt'},
+          ].map((k,i)=>(
+            <div key={i} className="kpi">
+              <div className="kpi-lbl">{k.lbl}</div>
+              <div className="kpi-val">{k.val}</div>
+              <div className={`kpi-delta ${k.cls}`}>{k.delta}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Fluxo Semanal por Turno */}
+        <div className="card mb14">
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}}>
+            <div className="card-title" style={{marginBottom:0}}>Fluxo Semanal por Turno</div>
+            <div style={{display:'flex',gap:4}}>
+              {['semana','mês','trimestre'].map(p=>(
+                <button key={p} className={`period-btn${period===p?' active':''}`} onClick={()=>setPeriod(p)}>
+                  {p.charAt(0).toUpperCase()+p.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <AreaChart data={flow}/>
+          <div style={{display:'flex',gap:18,marginTop:10,fontSize:11,color:'var(--muted)'}}>
+            <span style={{display:'flex',alignItems:'center',gap:6}}><span style={{width:22,height:2,background:'#FFDD00',display:'inline-block',borderRadius:2}}/> Manhã</span>
+            <span style={{display:'flex',alignItems:'center',gap:6}}><span style={{width:22,height:2,background:'#5A9048',display:'inline-block',borderRadius:2}}/> Tarde</span>
+            <span style={{display:'flex',alignItems:'center',gap:6}}><span style={{width:22,height:2,background:'#3E6A2E',display:'inline-block',borderRadius:2}}/> Noite</span>
+          </div>
+        </div>
+
+        {/* Mapa + Indicadores de Uso */}
+        <div className="g2 mb14" style={{gridTemplateColumns:'1.45fr 1fr'}}>
+          <div className="card">
+            <div className="card-title">Traçado da Rota</div>
+            <LeafletMap highlightId={sel.id} height="340px" mapKey={`linha-${sel.id}`}/>
+          </div>
+          <div className="card">
+            <div className="card-title">Indicadores de Uso</div>
+            <div className="mrow"><span className="mk">Tempo médio de viagem</span><span className="mv">{stats.tempoMedio} min</span></div>
+            <div className="mrow"><span className="mk">Intervalo médio entre ônibus</span><span className="mv">{stats.intervalo} min</span></div>
+            <div className="mrow"><span className="mk">Taxa de pontualidade</span><span className="mv">{stats.pontualidade}%</span></div>
+            <div className="mrow"><span className="mk">Cartões RFID ativos</span><span className="mv">{fmtBig(stats.rfid)}</span></div>
+            <div className="mrow"><span className="mk">Recargas registradas hoje</span><span className="mv">{fmtBig(stats.recargas)}</span></div>
+            <div className="mrow"><span className="mk">Viagens realizadas hoje</span><span className="mv">{stats.viagens}</span></div>
+            <div style={{marginTop:16}}>
+              <div className="prow"><span style={{fontSize:12}}>Ocupação atual</span><span className="mono" style={{fontSize:11}}>{sel.occ}%</span></div>
+              <div className="pbar" style={{height:8}}><div className="pfill" style={{width:`${sel.occ}%`,background:'#FFDD00'}}/></div>
+            </div>
+            <div style={{marginTop:10}}>
+              <div className="prow"><span style={{fontSize:12}}>Eficiência de rota</span><span className="mono" style={{fontSize:11}}>{sel.eff}%</span></div>
+              <div className="pbar" style={{height:8}}><div className="pfill" style={{width:`${sel.eff}%`,background:'#FFDD00'}}/></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Lotação por Hora */}
+        <div className="card mb14">
+          <div className="card-title">Lotação por Hora — {sel.id}</div>
+          <BarChart data={hData} h={85}/>
+          <div style={{display:'flex',gap:14,marginTop:6,fontSize:10,color:'var(--muted)'}}>
+            <span>■ <span style={{color:'#FFDD00'}}>Pico (&gt;80%)</span></span>
+            <span>■ <span style={{color:'#6B6B6B'}}>Normal</span></span>
+          </div>
+        </div>
+
+        {/* Otimização */}
+        <div className="card" style={{borderLeft:'4px solid var(--border)'}}>
+          <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:3}}>Otimização de Rota — Algoritmo I</div>
+              <div style={{fontSize:12,color:'var(--muted)',lineHeight:1.55}}>Analisa dados históricos dos últimos 30 dias e sugere reestruturação do trajeto: divisão, fusão com outras linhas ou eliminação de trechos redundantes.</div>
+            </div>
+            {!done
+              ? <button className="btn btn-primary" style={{flexShrink:0}} onClick={()=>setModal(true)}>Executar Otimização</button>
+              : <span className="badge bg" style={{flexShrink:0}}>✓ Análise concluída</span>
+            }
+          </div>
+          {done && (
+            <div style={{marginTop:16,padding:14,background:'var(--sub-card)',border:'1px solid var(--border)',borderRadius:4}}>
+              <div style={{fontSize:12,fontWeight:600,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.5px',color:'var(--muted)'}}>{sug.tipo}</div>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>{sug.titulo}</div>
+              <div style={{fontSize:12,color:'var(--text)',lineHeight:1.65,marginBottom:8}}>{sug.desc}</div>
+              <div className="mono" style={{fontSize:11,color:'var(--muted)',marginBottom:16}}>{sug.impacto}</div>
+              <div style={{fontSize:10,fontWeight:600,color:'var(--muted)',textTransform:'uppercase',letterSpacing:'0.8px',marginBottom:8}}>Nova rota proposta</div>
+              <OptMap lineId={sel.id} height="230px"/>
+              <div style={{display:'flex',gap:16,marginTop:9,marginBottom:14,fontSize:10,color:'var(--muted)',flexWrap:'wrap'}}>
+                <span style={{display:'flex',alignItems:'center',gap:5}}>
+                  <span style={{width:20,borderTop:'2px dashed #888',display:'inline-block'}}/>
+                  Rota original
+                </span>
+                {OPT_ROUTES[sel.id].map((seg,i)=>(
+                  <span key={i} style={{display:'flex',alignItems:'center',gap:5}}>
+                    <span style={{width:20,height:2,background:seg.color,display:'inline-block',borderRadius:2}}/>
+                    {seg.label}
+                  </span>
+                ))}
+              </div>
+              <div style={{display:'flex',gap:9}}>
+                <button className="btn btn-primary" style={{fontSize:11,padding:'5px 13px'}}>Aplicar sugestão</button>
+                <button className="btn btn-secondary" style={{fontSize:11,padding:'5px 13px'}} onClick={()=>setDone(false)}>Descartar</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {modal && (
+        <div className="overlay" onClick={()=>setModal(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div className="modal-title">Executar Otimização — {sel.id}</div>
+            <div style={{fontSize:12,color:'var(--muted)',lineHeight:1.6,marginBottom:14}}>
+              O algoritmo irá analisar dados de lotação, tempo de percurso, sobreposição com outras linhas e frequência para gerar sugestões de ajuste de trajeto.
+            </div>
+            <div style={{background:'#EFF6FF',border:'1px solid #BAE6FD',borderRadius:4,padding:12,fontSize:12,color:'#0369A1'}}>
+              Linha: <strong>{sel.id} — {sel.name}</strong><br/>
+              Eficiência atual: <strong>{sel.eff}%</strong> · Ocupação: <strong>{sel.occ}%</strong> · Atraso médio: <strong>{sel.delay} min</strong>
+            </div>
+            <div className="modal-foot">
+              <button className="btn btn-secondary" onClick={()=>setModal(false)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={()=>{setDone(true);setModal(false);}}>Executar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════
+   ALOCAÇÃO DE FROTA
+════════════════════════════════════════════ */
+const Frota = () => {
+  const [refreshed, setRefreshed]=useState(false);
+
+  const FLEET_REC = { L001:10, L002:6, L003:13, L004:9, L005:3 };
+  const totalBuses = LINES.reduce((s,l)=>s+l.buses,0);
+  const emOp=36, emMan=2, foraOp=1;
+  const dispPct = Math.round(emOp/totalBuses*100);
+
+  const sorted = [...LINES].sort((a,b)=>b.occ-a.occ);
+  const alta  = sorted.filter(l=>l.occ>70);
+  const baixa = sorted.filter(l=>l.occ<=70);
+
+  const tableRows = [...LINES]
+    .sort((a,b)=>b.occ-a.occ)
+    .map(l=>({...l, rec:FLEET_REC[l.id], adj:FLEET_REC[l.id]-l.buses}));
+
+  return (
+    <div>
+      <div className="topbar">
+        <span className="topbar-title">Alocação de Frota</span>
+        <button className="btn btn-secondary" style={{fontSize:11,padding:'5px 11px'}} onClick={()=>setRefreshed(true)}>
+          {Ic({n:'ref',s:12})} Atualizar
+        </button>
+      </div>
+      <div className="content">
+        {refreshed && (
+          <div style={{marginBottom:12,padding:'7px 13px',background:'var(--sub-card)',border:'1px solid var(--border)',borderRadius:4,fontSize:12,color:'var(--text)'}}>
+            ✓ Dados atualizados
+          </div>
+        )}
+
+        {/* KPIs */}
+        <div className="kpi-grid mb14">
+          <div className="kpi">
+            <div className="kpi-lbl">Frota Total</div>
+            <div className="kpi-val">{totalBuses}</div>
+            <div className="kpi-delta c-nt">Ônibus cadastrados</div>
+          </div>
+          <div className="kpi" style={{borderLeft:'3px solid var(--blue)'}}>
+            <div className="kpi-lbl">Em Operação</div>
+            <div className="kpi-val" style={{color:'var(--blue)'}}>{emOp}</div>
+            <div className="kpi-delta c-up">{dispPct}% disponibilidade</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-lbl">Em Manutenção</div>
+            <div className="kpi-val">{emMan}</div>
+            <div className="kpi-delta c-nt">Programada</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-lbl">Fora de Operação</div>
+            <div className="kpi-val">{foraOp}</div>
+            <div style={{display:'flex',alignItems:'center',gap:6,marginTop:3}}>
+              <span style={{fontSize:11,color:'var(--muted)'}}>Aguardando reparo</span>
+              <span className="badge br" style={{fontSize:9,padding:'1px 5px'}}>Atenção</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Maior / Menor demanda */}
+        <div className="g2 mb14">
+          <div className="card">
+            <div className="card-title">Linhas com maior demanda</div>
+            {alta.map((l,i)=>(
+              <div key={l.id} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 0',borderBottom:i<alta.length-1?'1px solid var(--border)':'none'}}>
+                <span className="badge bb" style={{minWidth:46,justifyContent:'center',fontFamily:'IBM Plex Mono',fontSize:10,fontWeight:700}}>{l.id}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:12,fontWeight:500,color:'var(--text)',marginBottom:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{l.name}</div>
+                  <div style={{fontSize:10,color:'var(--muted)',marginBottom:5}}>Frota atual: {l.buses} · Recomendado: {FLEET_REC[l.id]}</div>
+                  <div className="pbar" style={{height:4}}><div className="pfill" style={{width:`${l.occ}%`,background:'#FFDD00'}}/></div>
+                </div>
+                <div style={{fontSize:20,fontWeight:700,fontFamily:'IBM Plex Mono',color:'var(--text)',flexShrink:0}}>{l.occ}%</div>
+              </div>
+            ))}
+          </div>
+          <div className="card">
+            <div className="card-title">Linhas com menor demanda</div>
+            {baixa.map((l,i)=>(
+              <div key={l.id} style={{display:'flex',alignItems:'center',gap:12,padding:'11px 0',borderBottom:i<baixa.length-1?'1px solid var(--border)':'none'}}>
+                <span style={{background:'var(--hover-bg)',color:'var(--muted)',border:'1px solid var(--border)',borderRadius:3,padding:'2px 7px',fontSize:10,fontWeight:700,fontFamily:'IBM Plex Mono',flexShrink:0,minWidth:46,textAlign:'center'}}>{l.id}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:12,fontWeight:500,color:'var(--text)',marginBottom:2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{l.name}</div>
+                  <div style={{fontSize:10,color:'var(--muted)',marginBottom:5}}>Frota atual: {l.buses} · Recomendado: {FLEET_REC[l.id]}</div>
+                  <div className="pbar" style={{height:4}}><div className="pfill" style={{width:`${l.occ}%`,background:'var(--muted)'}}/></div>
+                </div>
+                <div style={{fontSize:20,fontWeight:700,fontFamily:'IBM Plex Mono',color:'var(--muted)',flexShrink:0}}>{l.occ}%</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Mapa */}
+        <div className="card mb14">
+          <div className="card-title">Mapa — distribuição geográfica das linhas</div>
+          <LeafletMap height="340px" mapKey="frota-map"/>
+        </div>
+
+        {/* Plano de Alocação Sugerido */}
+        <div className="card">
+          <div className="card-title">Plano de Alocação Sugerido</div>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Linha</th><th>Trajeto</th><th>Demanda</th>
+                <th>Frota Atual</th><th>Frota Recomendada</th>
+                <th>Ajuste</th><th>Tendência</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tableRows.map(l=>(
+                <tr key={l.id}>
+                  <td><span className="badge bb">{l.id}</span></td>
+                  <td style={{fontSize:12}}>{l.name}</td>
+                  <td>
+                    <div style={{display:'flex',alignItems:'center',gap:7}}>
+                      <div className="eff"><div className="eff-f" style={{width:`${l.occ}%`,background:'#FFDD00'}}/></div>
+                      <span className="mono" style={{fontSize:11}}>{l.occ}%</span>
+                    </div>
+                  </td>
+                  <td className="mono" style={{fontSize:12}}>{l.buses}</td>
+                  <td className="mono" style={{fontSize:12}}>{l.rec}</td>
+                  <td className="mono" style={{fontSize:13,fontWeight:700,color:l.adj>0?'var(--green)':l.adj<0?'var(--red)':'var(--muted)'}}>
+                    {l.adj>0?`+${l.adj}`:l.adj===0?'0':l.adj}
+                  </td>
+                  <td style={{fontSize:15,color:l.adj>0?'var(--green)':l.adj<0?'var(--red)':'var(--muted)'}}>
+                    {l.adj>0?'↑':l.adj<0?'↓':'—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════
+   SEGURANÇA
+════════════════════════════════════════════ */
+const Seguranca = () => {
+  const [incs, setIncs]=useState(INCIDENTS);
+  const [pol, setPol]=useState(null);
+  const [tab, setTab]=useState('todos');
+
+  const handle = (id, act) => { if(act==='pol'){setPol(id);return;} setIncs(p=>p.map(i=>i.id===id?{...i,st:act}:i)); };
+  const confirmPol = () => { setIncs(p=>p.map(i=>i.id===pol?{...i,st:'pol'}:i)); setPol(null); };
+
+  const TABS = [
+    {id:'todos',      lbl:'Todos'},
+    {id:'crime',      lbl:'Crimes'},
+    {id:'ocorrencia', lbl:'Ocorrências'},
+    {id:'operacional',lbl:'Operacional'},
+  ];
+
+  const catCount = id => incs.filter(i=>i.st==='pending'&&(id==='todos'||i.cat===id)).length;
+  const shown  = tab==='todos' ? incs : incs.filter(i=>i.cat===tab);
+  const active = shown.filter(i=>i.st==='pending');
+  const done   = shown.filter(i=>i.st!=='pending');
+  const totalPending = incs.filter(i=>i.st==='pending').length;
+
+  const SC = {Alta:'var(--blue)',Média:'var(--border)',Baixa:'var(--border)'};
+  const SB = {Alta:'bb',Média:'bm',Baixa:'bm'};
+  const stLbl = {pol:'→ Polícia acionada',arch:'Arquivado',ign:'Ignorado'};
+
+  return (
+    <div>
+      <div className="topbar">
+        <span className="topbar-title">Segurança — Ocorrências</span>
+        <span className="badge br">{totalPending} pendente{totalPending!==1?'s':''}</span>
+      </div>
+
+      {/* Abas */}
+      <div className="sec-tabs">
+        {TABS.map(t => {
+          const cnt = catCount(t.id);
+          return (
+            <div key={t.id} className={`sec-tab${tab===t.id?' active':''}`} onClick={()=>setTab(t.id)}>
+              {t.lbl}
+              {cnt>0 && <span className="sec-tab-count">({cnt})</span>}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="content">
+        {active.length>0 && (
+          <div className="mb18">
+            <div className="stitle">Pendentes</div>
+            {active.map(inc=>(
+              <div key={inc.id} className="inc-card" style={{borderLeft:`3px solid ${SC[inc.sev]}`}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                  <span className={`badge ${SB[inc.sev]}`}>{inc.sev}</span>
+                  <span style={{fontSize:13,fontWeight:600}}>{inc.type}</span>
+                  <span className="mono" style={{fontSize:11,color:'var(--muted)',marginLeft:'auto'}}>{inc.time} · {inc.line}</span>
+                </div>
+                <div style={{fontSize:11,color:'var(--muted)',marginBottom:5}}>{inc.loc}</div>
+                <div style={{fontSize:13,color:'var(--text)',marginBottom:10,lineHeight:1.5}}>{inc.desc}</div>
+                <div style={{display:'flex',gap:7}}>
+                  <button className="btn btn-danger" style={{fontSize:11,padding:'5px 12px'}} onClick={()=>handle(inc.id,'pol')}>Acionar Polícia</button>
+                  <button className="btn btn-secondary" style={{fontSize:11,padding:'5px 12px'}} onClick={()=>handle(inc.id,'arch')}>Arquivar</button>
+                  <button className="btn btn-secondary" style={{fontSize:11,padding:'5px 12px'}} onClick={()=>handle(inc.id,'ign')}>Ignorar</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {done.length>0 && (
+          <div>
+            <div className="stitle" style={{color:'var(--muted)'}}>Resolvidas</div>
+            {done.map(inc=>(
+              <div key={inc.id} className="inc-card" style={{opacity:0.55}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <span className={`badge ${SB[inc.sev]}`}>{inc.sev}</span>
+                  <span style={{fontSize:13,fontWeight:600}}>{inc.type}</span>
+                  <span className="mono" style={{fontSize:11,color:'var(--muted)'}}>{inc.time} · {inc.line}</span>
+                  <span style={{fontSize:11,color:'var(--muted)',marginLeft:'auto',fontStyle:'italic'}}>{stLbl[inc.st]}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!active.length && !done.length && (
+          <div style={{textAlign:'center',padding:'60px 0',color:'var(--muted)',fontSize:13}}>
+            Nenhuma ocorrência registrada nesta categoria.
+          </div>
+        )}
+      </div>
+
+      {pol && (
+        <div className="overlay" onClick={()=>setPol(null)}>
+          <div className="modal" style={{maxWidth:420}} onClick={e=>e.stopPropagation()}>
+            <div className="modal-title" style={{color:'#CC3333'}}>⚠ Acionar Polícia Militar</div>
+            <div style={{fontSize:12,color:'var(--text)',lineHeight:1.6,marginBottom:14}}>Confirma o acionamento da PM para a seguinte ocorrência?</div>
+            <div style={{padding:12,background:'rgba(204,51,51,0.08)',border:'1px solid rgba(204,51,51,0.2)',borderRadius:4,fontSize:12,lineHeight:1.5}}>
+              <strong>{incs.find(i=>i.id===pol)?.type}</strong> — {incs.find(i=>i.id===pol)?.loc}<br/>
+              <span style={{color:'var(--muted)'}}>{incs.find(i=>i.id===pol)?.desc}</span>
+            </div>
+            <div className="modal-foot">
+              <button className="btn btn-secondary" onClick={()=>setPol(null)}>Cancelar</button>
+              <button className="btn btn-danger" onClick={confirmPol}>Confirmar Acionamento</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════
+   CHAT
+════════════════════════════════════════════ */
+const Chat = () => {
+  const [msgs, setMsgs]=useState([
+    {from:'bot',text:'Olá! Sou o assistente do OptBus. Posso te ajudar a entender as funcionalidades do sistema e resolver dúvidas operacionais. Como posso ajudar?'}
+  ]);
+  const [inp, setInp]=useState('');
+  const botRef = useRef(null);
+  const suggs = ['Como filtrar por linha?','Como executar otimização?','Como alocar a frota?','Como tratar uma ocorrência?'];
+
+  const send = () => {
+    if(!inp.trim()) return;
+    const um = {from:'user',text:inp};
+    const bm = {from:'bot',text:getReply(inp)};
+    setMsgs(p=>[...p,um,bm]);
+    setInp('');
+  };
+
+  useEffect(()=>{ botRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs]);
+
+  return (
+    <div className="chat-wrap">
+      <div className="topbar">
+        <span className="topbar-title">Assistente OptBus</span>
+        <span style={{fontSize:11,color:'var(--blue)'}}>● Online</span>
+      </div>
+      <div className="chat-msgs">
+        {msgs.map((m,i)=>(
+          <div key={i} className={`bubble ${m.from}`}>{m.text}</div>
+        ))}
+        <div ref={botRef}/>
+      </div>
+      {msgs.length===1 && (
+        <div style={{padding:'0 26px 10px',display:'flex',gap:7,flexWrap:'wrap'}}>
+          {suggs.map(s=>(
+            <button key={s} className="btn btn-secondary" style={{fontSize:11,padding:'4px 11px'}} onClick={()=>setInp(s)}>
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="chat-bar">
+        <input className="chat-inp" value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="Digite sua dúvida sobre o sistema…"/>
+        <button className="btn btn-primary" onClick={send}>{Ic({n:'send',s:13,c:'#fff'})}</button>
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════
+   FAQ
+════════════════════════════════════════════ */
+const Faq = () => {
+  const [open, setOpen]=useState(null);
+  const [search, setSearch]=useState('');
+
+  const q = search.toLowerCase();
+  const filtered = FAQ_GROUPS.map(g=>({
+    ...g,
+    items: q ? g.items.filter(i=>i.q.toLowerCase().includes(q)||i.a.toLowerCase().includes(q)) : g.items,
+  })).filter(g=>g.items.length>0);
+
+  const SearchIc = () => (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+      <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" strokeWidth="1.3"/>
+      <path d="M10.5 10.5L14 14" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+    </svg>
+  );
+
+  return (
+    <div>
+      <div className="topbar"><span className="topbar-title">Perguntas Frequentes</span></div>
+      <div className="content" style={{maxWidth:760}}>
+
+        {/* Barra de pesquisa */}
+        <div style={{position:'relative',marginBottom:24}}>
+          <span style={{position:'absolute',left:13,top:'50%',transform:'translateY(-50%)',color:'var(--muted)',display:'flex'}}>
+            <SearchIc/>
+          </span>
+          <input
+            className="inp"
+            style={{paddingLeft:38,fontSize:13}}
+            placeholder="Buscar na central de ajuda…"
+            value={search}
+            onChange={e=>{setSearch(e.target.value);setOpen(null);}}
+          />
+          {search && (
+            <span
+              style={{position:'absolute',right:13,top:'50%',transform:'translateY(-50%)',cursor:'pointer',color:'var(--muted)',fontSize:16,lineHeight:1}}
+              onClick={()=>setSearch('')}
+            >×</span>
+          )}
+        </div>
+
+        {/* Grupos de tópicos */}
+        {filtered.length===0 ? (
+          <div style={{textAlign:'center',padding:'48px 0',color:'var(--muted)',fontSize:13}}>
+            Nenhuma pergunta encontrada para "{search}".
+          </div>
+        ) : filtered.map(g=>(
+          <div key={g.id} className="card mb14">
+            <div style={{fontSize:10,fontWeight:700,letterSpacing:'1.3px',textTransform:'uppercase',color:'var(--muted)',paddingBottom:10,borderBottom:'1px solid var(--border)',marginBottom:2}}>
+              {g.topic}
+            </div>
+            {g.items.map((f,i)=>(
+              <div key={f.id} style={{borderTop:i===0?'none':'1px solid var(--border)'}}>
+                <div
+                  className="faq-q"
+                  style={{color:open===f.id?'var(--blue)':'var(--text)',paddingLeft:0,paddingRight:0}}
+                  onClick={()=>setOpen(open===f.id?null:f.id)}
+                >
+                  <span>{f.q}</span>
+                  {Ic({n:open===f.id?'chvu':'chv',s:13,c:open===f.id?'var(--blue)':'#9CA3AF'})}
+                </div>
+                {open===f.id && (
+                  <div className="faq-a" style={{paddingLeft:0,paddingRight:0}}>{f.a}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/* ════════════════════════════════════════════
+   SESSION MODAL
+════════════════════════════════════════════ */
+const SessionModal = ({ onOk, onNo }) => (
+  <div className="overlay" onClick={onNo}>
+    <div className="modal" style={{maxWidth:340}} onClick={e=>e.stopPropagation()}>
+      <div className="modal-title">Encerrar Sessão</div>
+      <div style={{fontSize:13,color:'var(--muted)',lineHeight:1.6}}>Deseja encerrar a sessão atual? Você será redirecionado para a tela de login.</div>
+      <div className="modal-foot">
+        <button className="btn btn-secondary" onClick={onNo}>Não</button>
+        <button className="btn btn-primary" onClick={onOk}>Sim, encerrar</button>
+      </div>
+    </div>
+  </div>
+);
+
+// helper for CSS var in JSX
+const var_ = n => `var(${n})`;
+
+/* ════════════════════════════════════════════
+   APP ROOT
+════════════════════════════════════════════ */
+const App = () => {
+  const [screen, setScreen]=useState('login');
+  const [sessModal, setSessModal]=useState(false);
+  const [isDark, setIsDark]=useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed]=useState(false);
+
+  useEffect(()=>{
+    if(isDark) document.documentElement.classList.add('dark');
+    else document.documentElement.classList.remove('dark');
+  },[isDark]);
+
+  const SCREENS = {
+    dash:  <Dashboard/>,
+    linha: <Linha/>,
+    frota: <Frota/>,
+    sec:   <Seguranca/>,
+    chat:  <Chat/>,
+    faq:   <Faq/>,
+  };
+
+  // Theme toggle button — visible in all screens
+  const ThemeBtn = () => (
+    <button className="theme-btn" onClick={()=>setIsDark(d=>!d)} title={isDark?'Modo claro':'Modo escuro'}>
+      {isDark
+        ? <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.5" stroke="currentColor" strokeWidth="1.3"/><path d="M8 1.5v1M8 13.5v1M1.5 8h1M13.5 8h1M3.4 3.4l.7.7M11.9 11.9l.7.7M11.9 3.4l-.7.7M3.4 11.9l.7-.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+        : <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 10A6 6 0 016 2.5a6 6 0 000 11A6 6 0 0013.5 10z" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
+      }
+      {isDark ? 'Modo claro' : 'Modo escuro'}
+    </button>
+  );
+
+  if(screen==='login') return (
+    <>
+      <Login onLogin={()=>setScreen('dash')}/>
+      <ThemeBtn/>
+    </>
+  );
+
+  return (
+    <>
+      <div className="app">
+        <Sidebar cur={screen} nav={setScreen} logout={()=>setSessModal(true)} collapsed={sidebarCollapsed} onToggle={()=>setSidebarCollapsed(d=>!d)}/>
+        <div className="main">{SCREENS[screen]}</div>
+        {sessModal && <SessionModal onOk={()=>{setSessModal(false);setScreen('login');}} onNo={()=>setSessModal(false)}/>}
+      </div>
+      <ThemeBtn/>
+      {screen !== 'chat' && (
+        <button className="fab-chat" onClick={()=>setScreen('chat')} title="Abrir assistente">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path d="M4 4a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H8l-4 4V4z" stroke="#000" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M8 9h8M8 13h5" stroke="#000" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </button>
+      )}
+    </>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
